@@ -8,9 +8,7 @@
 
 #include <random>
 #include <Eigen/Dense>
-
-namespace kkl {
-  namespace alg {
+#include <kalman/kalman_filter.hpp>
 
 /**
  * @brief Cubature Kalman Filter class
@@ -18,9 +16,22 @@ namespace kkl {
  * @param System   system class to be estimated
  */
 template<typename T, class System>
-class CubatureKalmanFilterX {
+class CubatureKalmanFilterX : public KalmanFilter<T, System>
+{
   typedef Eigen::Matrix<T, Eigen::Dynamic, 1> VectorXt;    //列向量
   typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> MatrixXt;
+  using KalmanFilter<T, System>::state_dim;
+  using KalmanFilter<T, System>::N;
+  using KalmanFilter<T, System>::input_dim;
+  using KalmanFilter<T, System>::measurement_dim;
+  using KalmanFilter<T, System>::M;
+  using KalmanFilter<T, System>::mean;
+  using KalmanFilter<T, System>::cov;
+  using KalmanFilter<T, System>::system;
+  using KalmanFilter<T, System>::process_noise;
+  using KalmanFilter<T, System>::measurement_noise;
+  using KalmanFilter<T, System>::kalman_gain;
+
 public:
   /**
    * @brief constructor
@@ -33,43 +44,35 @@ public:
    * @param mean                 initial mean
    * @param cov                  initial covariance
    */
-  CubatureKalmanFilterX(const System& system, int state_dim, int input_dim, int measurement_dim, const MatrixXt& process_noise, const MatrixXt& measurement_noise, const VectorXt& mean, const MatrixXt& cov)
-    : state_dim(state_dim),
-    input_dim(input_dim),
-    measurement_dim(measurement_dim),
-    N(state_dim),
-    M(input_dim),
-    K(measurement_dim),
-    S(2 * state_dim),
-    mean(mean),
-    cov(cov),
-    system(system),
-    process_noise(process_noise),
-    measurement_noise(measurement_noise),
-    normal_dist(0.0, 1.0)
+  CubatureKalmanFilterX(const System& _system, int _state_dim, int _input_dim, int _measurement_dim, 
+                 const MatrixXt& _process_noise, const MatrixXt& _measurement_noise, 
+                 const VectorXt& _mean, const MatrixXt& _cov):
+    KalmanFilter<T, System>(_system, _state_dim, _input_dim, _measurement_dim, _process_noise, _measurement_noise, _mean, _cov),
+    S(2 * _state_dim) //容积点个数
   {
+    
     weights.resize(S, 1);
     cubature_points.resize(S, N);
-    ext_weights.resize(2*(N+K), 1);
-    ext_cubature_points.resize(2*(N+K), N + K);
-    expected_measurements.resize(2*(N+K), K);
+    ext_weights.resize(2*(N+M), 1);
+    ext_cubature_points.resize(2*(N+M), N + M);
+    expected_measurements.resize(2*(N+M), M);
 
     // initialize weights for cubature filter
-    for (int i = 0; i < S; i++) {
+    for (int i = 0; i < S; i++)
       weights[i] = 1.0 / S;
-    }
 
     // weights for extended state space which includes error variances
-    for (int i = 0; i < 2*(N+K); i++) {
-      ext_weights[i] = 1.0 / 2*(N+K);
-    }
+    for (int i = 0; i < 2*(N+M); i++)
+      ext_weights[i] = 1.0 / 2*(N+M);
+      
   }
 
   /**
    * @brief predict  预测函数
    * @param control  input vector
    */
-  void predict(const VectorXt& control) {
+  virtual void predict(const VectorXt& control) override
+  {
     // calculate cubature points
     ensurePositiveFinite(cov);
     computeCubaturePoints(mean, cov, cubature_points); //根据上一时刻的均值和方差计算cubature点
@@ -102,13 +105,14 @@ public:
    * @brief correct      校正函数
    * @param measurement  观测值
    */
-  void correct(const VectorXt& measurement) {
+  virtual void correct(const VectorXt& measurement) override
+  {
     // create extended state space which includes error variances
-    VectorXt ext_mean_pred = VectorXt::Zero(N + K, 1);
-    MatrixXt ext_cov_pred = MatrixXt::Zero(N + K, N + K);
+    VectorXt ext_mean_pred = VectorXt::Zero(N + M, 1);
+    MatrixXt ext_cov_pred = MatrixXt::Zero(N + M, N + M);
     ext_mean_pred.topLeftCorner(N, 1) = VectorXt(mean);
     ext_cov_pred.topLeftCorner(N, N) = MatrixXt(cov);
-    ext_cov_pred.bottomRightCorner(K, K) = measurement_noise;
+    ext_cov_pred.bottomRightCorner(M, M) = measurement_noise;
 
     ensurePositiveFinite(ext_cov_pred);
     computeCubaturePoints(ext_mean_pred, ext_cov_pred, ext_cubature_points); //根据预测均值和协方差以及测量噪声计算cubature点
@@ -118,76 +122,44 @@ public:
     expected_measurements.setZero();
     for (int i = 0; i < ext_cubature_points.rows(); i++) {
       expected_measurements.row(i) = system.h(ext_cubature_points.row(i).transpose().topLeftCorner(N, 1));     //观测方程传播cubature点集
-      expected_measurements.row(i) += VectorXt(ext_cubature_points.row(i).transpose().bottomRightCorner(K, 1));//添加测量噪声
+      expected_measurements.row(i) += VectorXt(ext_cubature_points.row(i).transpose().bottomRightCorner(M, 1));//添加测量噪声
     }
 
-    VectorXt expected_measurement_mean = VectorXt::Zero(K);
+    VectorXt expected_measurement_mean = VectorXt::Zero(M);
     for (int i = 0; i < ext_cubature_points.rows(); i++) {
       expected_measurement_mean += ext_weights[i] * expected_measurements.row(i);  //传播后的cubature点集均值
     }
-    MatrixXt expected_measurement_cov = MatrixXt::Zero(K, K);
+    MatrixXt expected_measurement_cov = MatrixXt::Zero(M, M);
     for (int i = 0; i < ext_cubature_points.rows(); i++)
       expected_measurement_cov += ext_weights[i] * expected_measurements.row(i).transpose() * expected_measurements.row(i);        
 
-    expected_measurement_cov -= expected_measurement_mean.transpose() * mean_pred; //传播后的cubature点集方差
+    expected_measurement_cov -= expected_measurement_mean.transpose() * expected_measurement_mean; //传播后的cubature点集方差
     expected_measurement_cov += measurement_noise;  //R = measurement_noise
 
     // calculated transformed covariance
-    MatrixXt cross_cov = MatrixXt::Zero(N, K); //互协方差
+    MatrixXt cross_cov = MatrixXt::Zero(N, M); //互协方差
     for(int i=0; i<S; ++i)
-      cross_cov += ext_weights[i] * ext_cubature_points.row(i).transpose() * expected_measurements.row(i)
+      cross_cov += ext_weights[i] * ext_cubature_points.row(i).transpose() * expected_measurements.row(i);
     cross_cov -= ext_mean_pred * expected_measurement_mean;
 
     kalman_gain = cross_cov * cross_cov.inverse(); //卡尔曼增益
-    const auto& K = kalman_gain;
 
-    VectorXt ext_mean = ext_mean_pred + K * (measurement - expected_measurement_mean); //最优估计
-    MatrixXt ext_cov = ext_cov_pred - K * expected_measurement_cov * K.transpose();    //最优估计的协方差
+    VectorXt ext_mean = ext_mean_pred + kalman_gain * (measurement - expected_measurement_mean); //最优估计
+    MatrixXt ext_cov = ext_cov_pred - kalman_gain * expected_measurement_cov * kalman_gain.transpose();    //最优估计的协方差
 
     mean = ext_mean.topLeftCorner(N, 1);
     cov = ext_cov.topLeftCorner(N, N);
   }
 
-  /*			getter			*/
-  const VectorXt& getMean() const { return mean; }
-  const MatrixXt& getCov() const { return cov; }
-  const MatrixXt& getSigmaPoints() const { return cubature_points; }
-
-  System& getSystem() { return system; }
-  const System& getSystem() const { return system; }
-  const MatrixXt& getProcessNoiseCov() const { return process_noise; }
-  const MatrixXt& getMeasurementNoiseCov() const { return measurement_noise; }
-
-  const MatrixXt& getKalmanGain() const { return kalman_gain; }
-
-  /*			setter			*/
-  CubatureKalmanFilterX& setMean(const VectorXt& m) { mean = m;			return *this; }
-  CubatureKalmanFilterX& setCov(const MatrixXt& s) { cov = s;			return *this; }
-
-  CubatureKalmanFilterX& setProcessNoiseCov(const MatrixXt& p) { process_noise = p;			return *this; }
-  CubatureKalmanFilterX& setMeasurementNoiseCov(const MatrixXt& m) { measurement_noise = m;	return *this; }
+  const MatrixXt& getSamplePoints() const { return cubature_points; }
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 private:
-  const int state_dim;
-  const int input_dim;
-  const int measurement_dim;
-
-  const int N;  //状态向量维度
-  const int M;  //控制向量维度
-  const int K;  //测量向量维度
-  const int S;  //采样点个数
+  const int S;  //容积点个数
 
 public:
-  VectorXt mean;
-  MatrixXt cov;
-
-  System system;
-  MatrixXt process_noise;		  //过程噪声 Q
-  MatrixXt measurement_noise;	//测量噪声 R
-
-  VectorXt weights;
-  MatrixXt cubature_points;
+  VectorXt weights;          //容积点权重,2N个容积点，权重相同
+  MatrixXt cubature_points;  //容积点
 
   VectorXt ext_weights;
   MatrixXt ext_cubature_points;
@@ -214,35 +186,8 @@ private:
     }
   }
 
-  /**
-   * @brief make covariance matrix positive finite
-   * @param cov  covariance matrix
-   */
-  void ensurePositiveFinite(MatrixXt& cov) {
-    return;
-    const double eps = 1e-9;
 
-    Eigen::EigenSolver<MatrixXt> solver(cov);
-    MatrixXt D = solver.pseudoEigenvalueMatrix();
-    MatrixXt V = solver.pseudoEigenvectors();
-    for (int i = 0; i < D.rows(); i++) {
-      if (D(i, i) < eps) {
-        D(i, i) = eps;
-      }
-    }
-
-    cov = V * D * V.inverse();
-  }
-
-public:
-  MatrixXt kalman_gain;
-
-  std::mt19937 mt;
-  std::normal_distribution<T> normal_dist;
 };
-
-  }
-}
 
 
 #endif

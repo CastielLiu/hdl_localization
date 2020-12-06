@@ -10,8 +10,8 @@
 #include <pcl/filters/voxel_grid.h>
 
 #include <hdl_localization/pose_system.hpp>
-#include <kkl/alg/unscented_kalman_filter.hpp>
-#include <kkl/alg/cubature_kalman_filter.hpp>
+#include <kalman/unscented_kalman_filter.hpp>
+#include <kalman/cubature_kalman_filter.hpp>
 
 namespace hdl_localization {
 
@@ -56,7 +56,7 @@ public:
     Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
 
     PoseSystem system;
-    ukf.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 6, 7, process_noise, measurement_noise, mean, cov));
+    ukf.reset(new UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 6, 7, process_noise, measurement_noise, mean, cov));
   }
 
   /**
@@ -75,7 +75,7 @@ public:
     prev_stamp = stamp;
 
     ukf->setProcessNoiseCov(process_noise * dt);
-    ukf->system.dt = dt;
+    ukf->getSystem().dt = dt;
 
     Eigen::VectorXf control(6);
     control.head<3>() = acc;
@@ -116,15 +116,18 @@ public:
 
   /* getters */
   Eigen::Vector3f pos() const {
-    return Eigen::Vector3f(ukf->mean[0], ukf->mean[1], ukf->mean[2]);
+    auto mean = ukf->getMean();
+    return Eigen::Vector3f(mean[0], mean[1], mean[2]);
   }
 
   Eigen::Vector3f vel() const {
-    return Eigen::Vector3f(ukf->mean[3], ukf->mean[4], ukf->mean[5]);
+    auto mean = ukf->getMean();
+    return Eigen::Vector3f(mean[3], mean[4], mean[5]);
   }
 
   Eigen::Quaternionf quat() const {
-    return Eigen::Quaternionf(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]).normalized();
+    auto mean = ukf->getMean();
+    return Eigen::Quaternionf(mean[6], mean[7], mean[8], mean[9]).normalized();
   }
 
   Eigen::Matrix4f matrix() const {
@@ -140,7 +143,7 @@ private:
   double cool_time_duration;    //
 
   Eigen::MatrixXf process_noise;
-  std::unique_ptr<kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>> ukf;
+  std::unique_ptr<UnscentedKalmanFilterX<float, PoseSystem>> ukf;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
 };

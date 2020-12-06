@@ -1,7 +1,7 @@
 #ifndef POSE_SYSTEM_HPP
 #define POSE_SYSTEM_HPP
 
-#include <kkl/alg/unscented_kalman_filter.hpp>
+#include <kalman/unscented_kalman_filter.hpp>
 
 namespace hdl_localization {
 
