@@ -11,6 +11,7 @@
 
 #include <hdl_localization/pose_system.hpp>
 #include <kkl/alg/unscented_kalman_filter.hpp>
+#include <kkl/alg/cubature_kalman_filter.hpp>
 
 namespace hdl_localization {
 
